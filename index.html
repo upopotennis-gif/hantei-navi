@@ -200,9 +200,9 @@ footer{margin-top:28px;font-size:12px;color:var(--sub);display:flex;flex-directi
   <div class="row">
     <span class="lbl">共テで受ける教科</span>
     <div class="subj" id="subj" role="group" aria-label="共テで受ける教科"></div>
-    <button type="button" class="more-btn" id="advBtn" aria-expanded="false">ほかの条件</button>
+    <button type="button" class="more-btn" id="advBtn" aria-expanded="true">ほかの条件をたたむ</button>
   </div>
-  <div class="row adv" id="adv" hidden>
+  <div class="row adv" id="adv">
     <select id="nittei" aria-label="日程">
       <option value="">日程：すべて</option><option value="前">前期</option><option value="中">中期</option><option value="後">後期</option><option value="独">独自日程</option><option value="共">私立（共テ利用）</option>
     </select>
@@ -225,8 +225,8 @@ footer{margin-top:28px;font-size:12px;color:var(--sub);display:flex;flex-directi
       <option value="near">B判定ラインの近く（±5%）</option>
     </select>
     <select id="sort" aria-label="並べ方">
+      <option value="rB-" selected>B判定ラインが高い順</option>
       <option value="judge">判定の良い順</option>
-      <option value="rB-">B判定ラインが高い順</option>
       <option value="rB+">B判定ラインが低い順</option>
       <option value="ratio-">共テの比率が高い順</option>
       <option value="ratio+">共テの比率が低い順</option>
@@ -322,7 +322,7 @@ document.querySelectorAll('#kubun button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#kubun button').forEach(x=>x.setAttribute('aria-pressed', x===b));
   update();
 });
-$('advBtn').onclick=()=>{ const a=$('adv'); a.hidden=!a.hidden; $('advBtn').setAttribute('aria-expanded', !a.hidden); };
+$('advBtn').onclick=()=>{ const a=$('adv'); a.hidden=!a.hidden; $('advBtn').setAttribute('aria-expanded', !a.hidden); $('advBtn').textContent = a.hidden ? 'ほかの条件' : 'ほかの条件をたたむ'; };
 $('big').onchange=()=>{ fillSys(); update(); };
 $('region').onchange=()=>{ fillPref(); update(); };
 for (const id of ['pref','women','sys','nittei','niji','ratio','judge','sort']) $(id).onchange=update;
@@ -387,7 +387,7 @@ const top = (keys, n) => { const v=keys.filter(has).sort((a,b)=>sc[b]/SMAX[b]-sc
 const pack = (label, keys) => ({label, s:keys.reduce((a,k)=>a+sc[k],0), m:keys.reduce((a,k)=>a+SMAX[k],0), keys});
 const KYOUKA = [
   r => { const k=['gen','ko','kan'].filter(has); return k.length ? pack('国語', k) : null; },
-  r => { const allow=(r.ks.rk||[0,1,2,3,4,5]).map(i=>'k'+i), n=(r.kc[1]&&r.kc[1][1])||1, k=top(allow,n); return k ? pack(k.map(x=>SNAME[x]).join('・'), k) : null; },
+  (r, rkN) => { const allow=(r.ks.rk||[0,1,2,3,4,5]).map(i=>'k'+i), n=rkN||(r.kc[1]&&r.kc[1][1])||1, k=top(allow,n); return k ? pack(k.map(x=>SNAME[x]).join('・'), k) : null; },
   r => { const ma=r.ks.ma||[[],[0,1,2]], mk=['m0','m1','m2'];
     const req=ma[0].map(i=>mk[i]); let opt=ma[1].map(i=>mk[i]); if (!req.length && !opt.length) opt=mk;
     if (!req.every(has)) return null;
@@ -409,13 +409,11 @@ const KYOUKA = [
   r => has('jo') ? pack('情報Ⅰ', ['jo']) : null,
 ];
 function combos(arr, k){ if (k===0) return [[]]; if (arr.length<k) return []; const [h,...t]=arr; return [...combos(t,k-1).map(c=>[h,...c]), ...combos(t,k)]; }
-function calcRow(r){
-  if (!r.kc.some(c=>c)) return null;
+function calcOnce(r, rkN, need){
   const req=[], opt=[], lack=[];
-  r.kc.forEach((c,i)=>{ if (!c) return; const v=KYOUKA[i](r);
+  r.kc.forEach((c,i)=>{ if (!c) return; const v=KYOUKA[i](r, rkN);
     if (c[0]==='R'){ if (v) req.push(v); else lack.push(SUBJ_FULL[KT[i]]); }
     else if (v) opt.push(v); });
-  let need=r.selNeed; if (r.ktN==null && !req.length && r.kc.some(c=>c&&c[0]!=='R')) need=1;
   if (opt.length<need) lack.push('選択の教科');
   if (lack.length) return {lack};
   let best=null;
@@ -423,8 +421,27 @@ function calcRow(r){
     const all=[...req,...c], s=all.reduce((a,x)=>a+x.s,0), m=all.reduce((a,x)=>a+x.m,0);
     if (m && (!best || s/m>best.s/best.m)) best={s,m,parts:all};
   }
-  if (!best) return {lack:['科目']};
+  return best || {lack:['科目']};
+}
+function calcRow(r){
+  if (!r.kc.some(c=>c)) return null;
+  const nR = r.kc.filter(c=>c&&c[0]==='R').length;
+  const [lo,hi] = Array.isArray(r.ktN) ? r.ktN : [r.ktN, r.ktN];
+  let needs = lo==null ? [r.kc.some(c=>c&&c[0]!=='R') && !nR ? 1 : 0] : [];
+  for (let n=lo; lo!=null && n<=hi; n++) needs.push(Math.max(0, n-nR));
+  needs = [...new Set(needs)];
+  // 教科数に幅があり、地歴公民の科目数が決まっていない方式は「地公2科目」もありうる
+  const rkNs = (lo!==hi && r.kc[1] && !r.kc[1][1]) ? [1,2] : [null];
+  let best=null, firstLack=null;
+  for (const rkN of rkNs) for (const need of needs){
+    const v = calcOnce(r, rkN, need);
+    if (v.lack){ firstLack = firstLack || v; continue; }
+    if (!best || v.s/v.m > best.s/best.m) best=v;
+  }
+  if (!best) return firstLack;
   best.rate=Math.round(best.s/best.m*1000)/10;
+  // 大学の共テ配点（満点）に直した点数。科目ごとの傾斜は分からないので、得点率をそのまま当てはめる
+  if (r.haiten && r.rawB!=null){ const full = r.rawB>r.haiten ? 1000 : r.haiten; best.conv=[Math.round(best.rate/100*full), full]; }
   return best;
 }
 
@@ -507,7 +524,7 @@ function fmt(v, d=1){ return v==null ? '—' : (Number.isInteger(v) ? v : v.toFi
 
 function head(r){
   const j = judgeOf(r, r.my);
-  const mine = r.my && inMode==='subj' ? (r.my.lack ? `<span class="tag lack">足りない科目：${esc(r.my.lack.join('・'))}</span>` : `<span class="mine">あなた ${r.my.rate.toFixed(1)}%</span>`) : '';
+  const mine = r.my && inMode==='subj' ? (r.my.lack ? `<span class="tag lack">足りない科目：${esc(r.my.lack.join('・'))}</span>` : `<span class="mine">あなた ${r.my.rate.toFixed(1)}%${r.my.conv?`（${r.my.conv[0]}/${r.my.conv[1]}点）`:''}</span>`) : '';
   const pct = state.mode==='pct';
   const rate = pct ? (r.rB!=null ? `${fmt(r.rB)}<small>%</small>` : (r.B!=null ? `${fmt(r.B/10)}<small>%</small>` : '—'))
                    : (r.B!=null ? `${r.B}<small>点</small>` : '—');
@@ -538,7 +555,7 @@ function detail(r){
   return `<div><h4>共通テスト（${nlab(r.ktN)??'—'}教科・${kt??'—'}点満点）</h4><dl>${kdl||'<dt>—</dt><dd>共テの科目指定なし</dd>'}</dl>${selK}</div>
   <div><h4>個別試験（${r.niN!=null?nlab(r.niN)+'教科・':''}${ni??'—'}点満点）</h4><dl>${ndl}${r.ex.length?`<dt>そのほか</dt><dd>${esc(r.ex.join('・'))}</dd>`:''}${!ndl&&!r.ex.length?'<dt>—</dt><dd>個別試験なし</dd>':''}</dl></div>
   <div><h4>判定ライン</h4><dl>
-    ${r.my && r.my.parts ? `<dt>あなた</dt><dd>${r.my.parts.map(x=>`${esc(x.label)} ${x.s}/${x.m}`).join('、')} → <b class="n">${r.my.s}/${r.my.m}</b> ＝ <b class="n">${r.my.rate.toFixed(1)}%</b></dd>` : ''}
+    ${r.my && r.my.parts ? `<dt>あなた</dt><dd>${r.my.parts.map(x=>`${esc(x.label)} ${x.s}/${x.m}`).join('、')} → <b class="n">${r.my.s}/${r.my.m}</b> ＝ <b class="n">${r.my.rate.toFixed(1)}%</b>${r.my.conv?`<br>大学の配点（${r.my.conv[1]}点満点）に直すと <b class="n">${r.my.conv[0]}</b>点（B判定ライン ${r.rawB}点）`:''}</dd>` : ''}
     <dt>共テ得点率</dt><dd>A <span class="n">${fmt(r.rA)}</span>　B <b class="n">${fmt(r.rB)}</b>　C <span class="n">${fmt(r.rC)}</span>　D <span class="n">${fmt(r.rD)}</span> %</dd>
     ${r.rawB!=null&&r.haiten?`<dt>B判定の点数</dt><dd><span class="n">${r.rawB}</span> / ${r.rawB>r.haiten?1000:r.haiten}点</dd>`:''}
     ${r.B!=null?`<dt>1000点換算</dt><dd>A <span class="n">${fmt(r.A)}</span>　B <b class="n">${r.B}</b>　C <span class="n">${fmt(r.C)}</span>　D <span class="n">${fmt(r.D)}</span> 点</dd>`:''}
